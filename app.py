@@ -4,7 +4,7 @@ Yap for Windows v3 — Premium Push-to-Talk Dictation
 Dark purple theme | Frameless | Glow animations
 """
 
-import sys, os, io, json, time, wave, threading, math, ctypes, queue, traceback
+import sys, os, io, json, time, wave, threading, math, ctypes, queue, traceback, difflib, re
 from ctypes import wintypes
 from datetime import datetime
 from pathlib import Path
@@ -47,6 +47,7 @@ CONFIG_DIR  = Path(os.environ.get("APPDATA", Path.home())) / APP_NAME
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_FILE  = CONFIG_DIR / "config.json"
 HISTORY_FILE = CONFIG_DIR / "history.json"
+CORRECT_FILE = CONFIG_DIR / "corrections.json"
 
 # Whisper copies the STYLE of this text, not just its vocabulary. So the hint
 # is written as real code-switched sentences: that is what teaches it "this
@@ -54,15 +55,12 @@ HISTORY_FILE = CONFIG_DIR / "history.json"
 # A bare word list alone still let "Ctrl" come back as "căn chuồn".
 DEFAULT_PROMPT = (
     "Anh review lại cái commit này giúp em, xong thì push lên branch main. "
-    "Mình cần fix cái bug ở workflow n8n trước deadline, rồi deploy lên production. "
+    "Mình cần fix cái bug ở workflow n8n trước deadline rồi deploy production. "
     "Let me know if the API key is still valid, tôi sẽ check lại trong file config. "
-    "Chú mở terminal lên chạy cái script Python đó, nhớ backup database trước. "
-    "Cái landing page bên Shopify với flow bên Klaviyo đang lỗi, em xem lại template. "
-    "Bấm Ctrl, Alt, Shift, Enter, Tab, Esc — mấy phím này anh hay nhắc tới. "
-    "Các tên hay dùng: Claude, Codex, Cursor, Linear, GitHub, Printify, WordPress, "
-    "Etsy, Meta, YouTube, Google Drive, Gmail, Excel, Notepad, Chrome, Windows. "
-    "Từ hay gặp: file, folder, repo, merge, log, server, query, build, test, debug, "
-    "token, campaign, segment, SKU, JSON, PDF, URL, link, app, screenshot, budget."
+    "Chú mở terminal chạy cái script Python đó, nhớ backup database trước. "
+    "Bấm Ctrl, Alt, Shift, Enter, Tab, Esc. "
+    "Tên hay dùng: Claude, Codex, Linear, GitHub, Shopify, Klaviyo, Printify, "
+    "WordPress, Etsy, Meta, YouTube, Chrome, Excel."
 )
 
 DEFAULT_CONFIG = {
@@ -88,6 +86,26 @@ GROQ_MODELS = {
 }
 
 HOLD_THRESHOLD = 0.4   # seconds the key must be held before it counts as dictation
+
+# Bao nhieu cau vua noi duoc nhet vao mo. Whisper bam theo ngu canh gan: dang
+# noi ve Shopify thi cau sau nghieng ve tu vung Shopify.
+RECENT_CONTEXT   = 2
+RECENT_MAX_CHARS = 160   # mot cau dai khong duoc an het ngan sach mo
+
+# Groq TU CHOI thang neu mo dai qua — khong cat bot, ma tra loi 400.
+# Va no dem BYTE UTF-8, khong dem ky tu: 773 ky tu tieng Viet = 901 byte, vi
+# moi chu co dau ton 2-3 byte. Dem bang len() la hut mot phan tu.
+MAX_PROMPT_BYTES = 880
+
+# Kho sua loi: nguoi dung sua mot lan trong cua so Lich su, app nho mai.
+CORRECT_BYTES    = 200   # phan ngan sach mo danh cho tu da sua
+CORRECT_MAX_WORDS = 4    # cum dai hon thi la viet lai cau, khong phai sua tu
+AUTO_MIN_CHARS   = 5     # ngan hon va chi mot tu thi chi moi, khong thay tay
+CONTEXT_GROW     = 3     # so lan noi cum ra hai ben cho du dac trung
+
+# Cham nhanh hai lan = mo Lich su. Thanh song chi hien luc dang giu phim, va
+# Windows giau icon khay moi cai — khong co cai nay thi khong vao duoc.
+DOUBLE_TAP = 0.6
 
 # The API key lives in this project's own .env, not in a shared store and not
 # in another repo's file. config.json stays as a fallback for existing installs.
@@ -171,6 +189,138 @@ def load_env() -> dict:
     return out
 
 
+def load_corrections() -> dict:
+    """{nghe nhầm: đúng}. Người dùng sửa một lần, app nhớ mãi."""
+    if CORRECT_FILE.exists():
+        try:
+            d = json.loads(CORRECT_FILE.read_text("utf-8"))
+            return {k: v for k, v in d.items() if isinstance(k, str) and isinstance(v, str)}
+        except Exception:
+            traceback.print_exc()
+    return {}
+
+
+def save_corrections(c: dict) -> None:
+    _write_atomic(CORRECT_FILE, json.dumps(c, indent=2, ensure_ascii=False))
+
+
+_STRIP = " 	.,!?;:\"'()[]…"
+
+
+def learn_corrections(before: str, after: str) -> list:
+    """So bản máy nghe với bản người sửa, rút ra các cặp (nhầm, đúng).
+
+    Chỉ nhận thay thế ngắn. Một cụm dài bị đổi thường là người dùng viết lại
+    câu cho gọn, không phải máy nghe sai — học cái đó vào là hỏng về sau.
+    """
+    a, b = before.split(), after.split()
+    pairs = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b).get_opcodes():
+        if tag != "replace":
+            continue
+        if i2 - i1 > CORRECT_MAX_WORDS or j2 - j1 > CORRECT_MAX_WORDS:
+            continue                  # viết lại cả câu, không phải sửa từ
+
+        # Cụm quá ngắn thì NỚI RA HAI BÊN thay vì vứt đi. Sửa "nỗi"→"lỗi" một
+        # mình là nguy hiểm (phá "nỗi buồn"), nhưng "bị nỗi nhiều"→"bị lỗi
+        # nhiều" thì an toàn. Nhờ vậy học được đúng loại lỗi hay gặp nhất.
+        lo, hi, dlo, dhi = i1, i2, j1, j2
+        for _ in range(CONTEXT_GROW):
+            wrong = " ".join(a[lo:hi]).strip(_STRIP)
+            if auto_safe(wrong):
+                break
+            if lo > 0 and dlo > 0:            # lấy thêm một từ bên trái
+                lo -= 1; dlo -= 1
+            elif hi < len(a) and dhi < len(b):  # hoặc bên phải
+                hi += 1; dhi += 1
+            else:
+                break
+
+        wrong = " ".join(a[lo:hi]).strip(_STRIP)
+        right = " ".join(b[dlo:dhi]).strip(_STRIP)
+        if not wrong or not right or wrong.casefold() == right.casefold():
+            continue
+        if len(wrong) < 3:
+            continue
+        pairs.append((wrong, right))
+    return pairs
+
+
+def auto_safe(wrong: str) -> bool:
+    """Cụm này có đủ đặc trưng để thay tự động không?
+
+    Một từ ngắn thì KHÔNG. Học "ông"→"không" rồi thay khắp nơi sẽ biến
+    "ông ấy đi rồi" thành "không ấy đi rồi"; học "xác"→"để" làm hỏng
+    "chính xác". Những cặp đó vẫn được mồi cho Whisper, nhưng không thay tay.
+    """
+    return len(wrong.split()) >= 2 or len(wrong) >= AUTO_MIN_CHARS
+
+
+def apply_corrections(text: str, corr: dict) -> str:
+    """Thay các cụm đã học. Khớp theo BIÊN TỪ để 'ông' không ăn vào 'không'."""
+    if not text or not corr:
+        return text
+    for wrong in sorted(corr, key=len, reverse=True):   # cụm dài ưu tiên
+        if not auto_safe(wrong):
+            continue                                    # chỉ mồi, không thay
+        # Thay bằng lambda, không bằng chuỗi: một bản sửa chứa \1 hay \g sẽ bị
+        # re.sub hiểu thành backreference và ném lỗi giữa lúc đang dùng.
+        right = corr[wrong]
+        text = re.sub(r"(?<!\w)" + re.escape(wrong) + r"(?!\w)",
+                      lambda _m, r=right: r, text, flags=re.IGNORECASE)
+    return text
+
+
+def _nbytes(s: str) -> int:
+    return len(s.encode("utf-8"))
+
+
+def _fit_bytes(s: str, budget: int) -> str:
+    """Cắt chuỗi cho vừa `budget` byte UTF-8, không cắt giữa một ký tự."""
+    b = s.encode("utf-8")
+    if len(b) <= budget:
+        return s
+    return b[:budget].decode("utf-8", "ignore")
+
+
+def build_prompt(cfg: dict, history: list, corr: dict = None) -> str:
+    """Mồi gửi cho Whisper = vài câu vừa nói + danh sách từ vựng.
+
+    Whisper chỉ giữ **224 token CUỐI** của prompt. Nên từ vựng đặt sau cùng để
+    luôn sống sót; ngữ cảnh gần đứng trước, bị cắt cũng không mất gì cốt lõi.
+    """
+    # Tu da sua tay dat CUOI cung: dung nhat vi chinh nguoi dung day, va Whisper
+    # coi trong phan duoi cua mo nhat.
+    fixed = ""
+    if corr:
+        seen, words = set(), []
+        for right in reversed(list(corr.values())):
+            k = right.casefold()
+            if k not in seen:
+                seen.add(k); words.append(right)
+        fixed = _fit_bytes(", ".join(words), CORRECT_BYTES).rstrip(", ")
+        if fixed:
+            fixed = " " + fixed + "."
+
+    budget = MAX_PROMPT_BYTES - _nbytes(fixed)
+    vocab  = _fit_bytes((cfg.get("prompt") or "").strip(), budget)
+
+    # Tu vung duoc uu tien: nguoi dung tu soan, va no la thu sua duoc "Ctrl".
+    # Ngu canh chi lap phan con thua — het cho thi bo, khong bao gio tran.
+    room   = budget - _nbytes(vocab)
+    recent = []
+    for item in reversed(history[-RECENT_CONTEXT:]):        # moi nhat truoc
+        t = (item.get("text") or "").strip()[:RECENT_MAX_CHARS]
+        if not t or _nbytes(t) + 1 > room:
+            continue
+        recent.insert(0, t)                                  # giu dung thu tu
+        room -= _nbytes(t) + 1
+
+    out = " ".join(recent + ([vocab] if vocab else [])) + fixed
+    assert _nbytes(out) <= MAX_PROMPT_BYTES, f"mo {_nbytes(out)} byte, vuot tran"
+    return out
+
+
 def provider_key(provider: str, cfg: dict) -> str:
     """.env wins over config.json — one key, one place, per project."""
     from_env = load_env().get(ENV_KEY_NAMES.get(provider, ""), "").strip()
@@ -216,11 +366,18 @@ def acquire_single_instance():
     and both paste — and they fight over config.json.
     """
     ERROR_ALREADY_EXISTS = 183
-    k32 = ctypes.windll.kernel32
-    k32.CreateMutexW.restype = wintypes.HANDLE
+    # use_last_error=True + get_last_error(): ctypes chụp mã lỗi NGAY tại lời
+    # gọi. Gọi kernel32.GetLastError() riêng ra thì Python có thể đã gọi Win32
+    # API khác ở giữa và xoá mất mã — khoá im lặng không chặn được ai.
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateMutexW.restype  = wintypes.HANDLE
+    k32.CreateMutexW.argtypes = [wintypes.LPCVOID, wintypes.BOOL, wintypes.LPCWSTR]
     handle = k32.CreateMutexW(None, False, f"Local\\{APP_NAME}-SingleInstance")
-    if not handle or k32.GetLastError() == ERROR_ALREADY_EXISTS:
+    err = ctypes.get_last_error()
+    if not handle or err == ERROR_ALREADY_EXISTS:
+        print(f"[instance] da co ban khac dang chay (err={err})")
         return None
+    print(f"[instance] pid {os.getpid()} giu khoa")
     return handle
 
 
@@ -403,12 +560,13 @@ class AudioRecorder:
         self._stream = None
         self.recording = False
         self.samplerate = SAMPLE_RATE
-        self.level = 0.0        # live mic amplitude 0..1, drives the waveform
+        self._drops = 0         # so lan PortAudio bao tran/mat mau
 
     def start(self) -> None:
         # Walk the candidates until one really opens AND starts. Never let the
         # quality preference cost us the ability to record at all.
         self._frames = []
+        self._drops  = 0
         last = None
         for device, rate in input_candidates():
             stream = None
@@ -434,16 +592,33 @@ class AudioRecorder:
         raise last or RuntimeError("Khong mo duoc microphone nao")
 
     def _cb(self, indata, frames, t, status):
-        if not self.recording: return
+        """Callback thời gian thực: CHỈ sao chép, không tính toán gì.
+
+        Bản trước tính RMS ngay tại đây — mỗi block một lần cấp phát mảng
+        float32 mới. PortAudio không chờ: callback chậm là nó báo
+        `input_overflow` và VỨT các mẫu tiếp theo. Mất 30-100ms là mất trọn
+        một phụ âm, nên nói chậm thì chép đúng mà nói nhanh thì sai.
+        """
+        if status:
+            self._drops += 1          # gần như luôn là input_overflow
+        if not self.recording:
+            return
         self._frames.append(indata.copy())
-        # Live level for the waveform, 0..1. Cheap enough to do per block.
-        block = indata.astype(np.float32)
-        rms = float(np.sqrt(np.mean(block * block))) if block.size else 0.0
-        self.level = min(1.0, rms / 4000.0)
+
+    @property
+    def level(self) -> float:
+        """Mức âm cho thanh sóng, tính ở luồng đọc chứ không ở callback."""
+        try:
+            blk = self._frames[-1]
+        except IndexError:
+            return 0.0
+        if blk.size == 0:
+            return 0.0
+        rms = float(np.sqrt(np.mean(blk.astype(np.float32) ** 2)))
+        return min(1.0, rms / 4000.0)
 
     def stop(self) -> Optional[bytes]:
         self.recording = False
-        self.level = 0.0
         if self._stream:
             self._stream.stop(); self._stream.close(); self._stream = None
         if not self._frames: return None
@@ -883,7 +1058,7 @@ class MainWindow(ctk.CTk):
                 return
         except Exception:
             pass
-        self._hist_win = HistoryWindow(self, self.history)
+        self._hist_win = HistoryWindow(self, self.history, self.app_ref)
 
     def _open_settings(self, e=None):
         if self.app_ref:
@@ -897,16 +1072,28 @@ class MainWindow(ctk.CTk):
 class HistoryWindow(ctk.CTkToplevel):
     """The transcript log, no longer crowding the bar. Click a row to copy."""
 
-    def __init__(self, parent, history):
+    def __init__(self, parent, history, app_ref=None):
         super().__init__(parent)
+        self.app_ref = app_ref
         self.title("Lich su - Yap")
-        self.geometry("420x560")
+        self.geometry("460x600")
         self.configure(fg_color=BG)
         self.attributes("-topmost", True)
+        bar = ctk.CTkFrame(self, fg_color="transparent")
+        bar.pack(fill="x", padx=10, pady=(10, 0))
+        ctk.CTkLabel(bar, text="Nhấp = copy   ·   Nhấp đúp = sửa (app sẽ nhớ)",
+                     font=("Segoe UI", 10), text_color=DIM).pack(side="left")
+        self._fix_btn = ctk.CTkButton(
+            bar, text="Đã học 0", width=92, height=26, corner_radius=8,
+            font=("Segoe UI", 10), fg_color=BG3, hover_color=BORDER2,
+            text_color=DIM, command=self._show_learned)
+        self._fix_btn.pack(side="right")
+
         self._list = ctk.CTkScrollableFrame(
             self, fg_color=BG, scrollbar_button_color=BG3,
             scrollbar_button_hover_color=BORDER2)
         self._list.pack(fill="both", expand=True, padx=8, pady=8)
+        self._refresh_count()
         for item in reversed(history[-60:]):
             self._row(item.get("text", ""), item.get("timestamp", ""))
 
@@ -923,9 +1110,120 @@ class HistoryWindow(ctk.CTkToplevel):
             row.pack(fill="x", pady=(0, 4))
         ctk.CTkLabel(row, text=ts, font=("Segoe UI", 9),
                      text_color=DIM).pack(anchor="w", padx=12, pady=(6, 0))
-        ctk.CTkLabel(row, text=text, font=("Segoe UI", 11), text_color=TEXT,
-                     wraplength=350, justify="left").pack(
-            anchor="w", padx=12, pady=(2, 7))
+        body = ctk.CTkLabel(row, text=text, font=("Segoe UI", 11), text_color=TEXT,
+                            wraplength=380, justify="left")
+        body.pack(anchor="w", padx=12, pady=(2, 7))
+        row._body, row._text, row._ts = body, text, ts
+
+        def edit(_=None):
+            self._open_editor(row)
+
+
+    # -- sua va hoc -------------------------------------------------
+    def _refresh_count(self):
+        n = len(self.app_ref.corrections) if self.app_ref else 0
+        self._fix_btn.configure(text=f"Da hoc {n}")
+
+    def _open_editor(self, row):
+        """Hop sua mot dong. Luu xong thi app rut ra cap (nham -> dung)."""
+        d = ctk.CTkToplevel(self)
+        d.title("Sua ban chep")
+        d.geometry("520x260")
+        d.configure(fg_color=BG)
+        d.attributes("-topmost", True)
+        d.after(60, d.lift)
+
+        ctk.CTkLabel(d, text="May nghe thanh:", font=("Segoe UI", 10),
+                     text_color=DIM).pack(anchor="w", padx=16, pady=(14, 2))
+        ctk.CTkLabel(d, text=row._text, font=("Segoe UI", 10), text_color=DIM2,
+                     wraplength=480, justify="left").pack(anchor="w", padx=16)
+
+        ctk.CTkLabel(d, text="Sua lai cho dung:", font=("Segoe UI", 10),
+                     text_color=DIM).pack(anchor="w", padx=16, pady=(12, 2))
+        box = ctk.CTkTextbox(d, height=80, font=("Segoe UI", 12), fg_color=BG3,
+                             border_color=BORDER2, border_width=1,
+                             text_color=TEXT, wrap="word")
+        box.pack(fill="x", padx=16)
+        box.insert("1.0", row._text)
+        box.focus_set()
+
+        def save():
+            after = box.get("1.0", "end").strip()
+            d.destroy()
+            if not after or after == row._text:
+                return
+            self._commit_edit(row, after)
+
+        btns = ctk.CTkFrame(d, fg_color="transparent")
+        btns.pack(fill="x", padx=16, pady=14)
+        ctk.CTkButton(btns, text="Luu va ghi nho", height=36, corner_radius=10,
+                      font=("Segoe UI", 12, "bold"), fg_color=PURPLE,
+                      hover_color=PURPLED, command=save).pack(side="left")
+        ctk.CTkButton(btns, text="Thoi", height=36, width=80, corner_radius=10,
+                      font=("Segoe UI", 12), fg_color=BG3, hover_color=BORDER2,
+                      text_color=DIM, command=d.destroy).pack(side="left", padx=8)
+
+    def _commit_edit(self, row, after):
+        before = row._text
+        learned = self.app_ref.learn_from_edit(before, after, row._ts) if self.app_ref else []
+        row._text = after
+        row._body.configure(text=after)
+        self._refresh_count()
+        if learned:
+            msg = chr(10).join(
+                f'  "{w}"  ->  "{r}"'
+                + ("" if auto_safe(w) else "   (chi nhac may, khong tu thay)")
+                for w, r in learned)
+            messagebox.showinfo(
+                "Yap",
+                f"Da ghi nho {len(learned)} cho sua:{chr(10)}{chr(10)}{msg}",
+                parent=self)
+        else:
+            messagebox.showinfo(
+                "Yap", "Da sua trong lich su, nhung khong rut ra duoc cap tu nao "
+                       "de hoc (doan sua qua dai hoac qua ngan).", parent=self)
+
+    def _show_learned(self):
+        corr = dict(self.app_ref.corrections) if self.app_ref else {}
+        d = ctk.CTkToplevel(self)
+        d.title("Nhung cho da hoc")
+        d.geometry("470x520")
+        d.configure(fg_color=BG)
+        d.attributes("-topmost", True)
+        d.after(60, d.lift)
+        if not corr:
+            ctk.CTkLabel(d, text="Chua hoc duoc gi." + chr(10) * 2 +
+                                 "Nhap dup mot dong trong Lich su" + chr(10) +
+                                 "roi sua lai cho dung.",
+                         font=("Segoe UI", 12), text_color=DIM,
+                         justify="center").pack(expand=True)
+            return
+        lst = ctk.CTkScrollableFrame(d, fg_color=BG, scrollbar_button_color=BG3)
+        lst.pack(fill="both", expand=True, padx=10, pady=10)
+        for wrong, right in reversed(list(corr.items())):
+            r = ctk.CTkFrame(lst, fg_color=BG2, corner_radius=10,
+                             border_width=1, border_color=BORDER)
+            r.pack(fill="x", pady=(0, 4))
+            ctk.CTkLabel(r, text=wrong, font=("Segoe UI", 11), text_color=RED,
+                         wraplength=280, justify="left").pack(
+                side="left", padx=(12, 4), pady=8)
+            ctk.CTkLabel(r, text="->", font=("Segoe UI", 10),
+                         text_color=DIM).pack(side="left")
+            ctk.CTkLabel(r, text=right, font=("Segoe UI", 11, "bold"),
+                         text_color=GREEN if auto_safe(wrong) else BLUE,
+                         wraplength=140, justify="left").pack(side="left", padx=4)
+            if not auto_safe(wrong):
+                ctk.CTkLabel(r, text="chi nhac", font=("Segoe UI", 9),
+                             text_color=DIM2).pack(side="left", padx=4)
+
+            def drop(_=None, w=wrong, frame=r):
+                self.app_ref.forget_correction(w)
+                frame.destroy()
+                self._refresh_count()
+            ctk.CTkButton(r, text="x", width=26, height=26, corner_radius=6,
+                          font=("Segoe UI", 11), fg_color=BG3,
+                          hover_color=RED, text_color=DIM,
+                          command=drop).pack(side="right", padx=8)
 
         def copy(_=None):
             pyperclip.copy(text)
@@ -934,6 +1232,7 @@ class HistoryWindow(ctk.CTkToplevel):
 
         for w in [row] + list(row.winfo_children()):
             w.bind("<Button-1>", copy)
+            w.bind("<Double-Button-1>", edit)
             w.bind("<Enter>", lambda e, r=row: r.configure(fg_color=BG3))
             w.bind("<Leave>", lambda e, r=row: r.configure(fg_color=BG2))
 
@@ -957,6 +1256,8 @@ class YapApp:
         self._shutdown    = threading.Event()
         self._flash_gen   = 0
         self._target_hwnd = None
+        self._last_tap    = 0.0
+        self.corrections  = load_corrections()
         self._hook        = None
 
         self.win = MainWindow()
@@ -1066,6 +1367,15 @@ class YapApp:
             return
         if not armed:
             # Tap, not a hold — the user never meant to dictate. Drop it.
+            # But two quick taps opens History: the bar only exists while you
+            # hold the key, and Windows hides new tray icons, so without this
+            # there is no reachable way in.
+            now = time.time()
+            if now - self._last_tap < DOUBLE_TAP:
+                self._last_tap = 0.0
+                self.win.after(0, self.win._open_history)
+            else:
+                self._last_tap = now
             self._set_state("idle"); return
         if not audio:
             self._set_state("idle"); return
@@ -1080,13 +1390,32 @@ class YapApp:
             print(f"[skip] no speech: rms={rms:.0f} over {duration:.2f}s")
             self._flash_state("no speech"); return
 
+        # Ghi lai de con doi chieu khi chep sai: tin hieu qua nho hay qua to
+        # (vo tieng) deu lam Whisper doan bua, nhat la khi noi nhanh.
+        peak = 0
+        try:
+            with wave.open(io.BytesIO(audio), "rb") as _wf:
+                _s = np.frombuffer(_wf.readframes(_wf.getnframes()), dtype=np.int16)
+                peak = int(np.abs(_s).max()) if _s.size else 0
+        except Exception:
+            pass
+        drops = getattr(self._recorder, "_drops", 0)
+        print(f"[audio] {duration:.2f}s  rms={rms:.0f}  dinh={peak}"
+              f" ({peak / 327.68:.0f}% thang do)"
+              f"{'  <-- VO TIENG' if peak >= 32700 else ''}"
+              f"{f'  <-- MAT MAU x{drops}' if drops else ''}")
+
         self._set_state("transcribing")
         threading.Thread(target=self._transcribe, args=(audio, target),
                          daemon=True).start()
 
     def _transcribe(self, audio: bytes, target_hwnd=None):
         try:
-            text = self._transcriber.transcribe(audio, self.cfg)
+            cfg = dict(self.cfg)
+            with self._hist_lock:
+                cfg["prompt"] = build_prompt(self.cfg, self.history, self.corrections)
+            text = self._transcriber.transcribe(audio, cfg)
+            text = apply_corrections(text, self.corrections)
             # Re-check before EACH side effect, not once up front: quit() can
             # land while _paste is waiting, and a dead app must not type.
             if text and not self._shutdown.is_set():
@@ -1216,6 +1545,33 @@ class YapApp:
                 traceback.print_exc()
         elif lost_other:
             self._flash_state("clipboard replaced")
+
+    # ── Học từ chỗ người dùng sửa ─────────────────────────
+    def learn_from_edit(self, before: str, after: str, ts: str) -> list:
+        """Ghi bản sửa vào lịch sử, và rút ra các cặp (nghe nhầm → đúng)."""
+        with self._hist_lock:
+            for item in self.history:
+                if item.get("timestamp") == ts and item.get("text") == before:
+                    item["text"] = after
+                    break
+            save_history(self.history)
+
+        learned = []
+        for wrong, right in learn_corrections(before, after):
+            # Không học ngược lại chính bản sửa của mình: nếu "đúng" lại là một
+            # vế "nhầm" đã có, hai luật sẽ đá nhau mỗi lần chép lời.
+            if right in self.corrections:
+                continue
+            self.corrections[wrong] = right
+            learned.append((wrong, right))
+        if learned:
+            save_corrections(self.corrections)
+            print(f"[hoc] {learned}")
+        return learned
+
+    def forget_correction(self, wrong: str):
+        if self.corrections.pop(wrong, None) is not None:
+            save_corrections(self.corrections)
 
     def _save_hist(self, text: str):
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
