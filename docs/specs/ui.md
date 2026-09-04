@@ -1,6 +1,6 @@
 # Giao diện
 
-`app.py:687` `MainWindow` · `app.py:897` `HistoryWindow` · `app.py:507` `SettingsDialog`
+`MainWindow` · `HistoryWindow` · `SettingsDialog`
 
 ## Thanh sóng — `MainWindow`
 

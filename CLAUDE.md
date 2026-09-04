@@ -5,8 +5,8 @@ Người dùng trộn Việt–Anh liên tục — đó là lưu lượng chính
 
 ## Tech stack
 
-Python 3.13 · `sounddevice` (PortAudio) · `customtkinter`/`tkinter` · `pystray` ·
-`pywin32` · Groq Whisper (`groq`), OpenAI tuỳ chọn. Toàn bộ trong `app.py`.
+Python 3.13 · `sounddevice` · `customtkinter` · `pystray` · `pywin32` ·
+Groq Whisper (`groq`), OpenAI tuỳ chọn. Toàn bộ trong `app.py`.
 
 ## Lệnh
 
@@ -22,11 +22,10 @@ Không có test tự động. Mọi thay đổi phải chạy app thật và gi�
 
 ## Quy chuẩn
 
-- **`py -3`, không phải `python`** trong mọi `.bat`. Trên máy này `python` trỏ
-  vào venv khác, không có thư viện của Yap.
-- **Không ghim đường dẫn tuyệt đối** — thư mục này sẽ bị chuyển chỗ. Dùng
-  `Path(__file__).resolve().parent`.
-- File `.bat`: ASCII + CRLF. Key đọc từ `.env`. Comment nói **vì sao**, không tả lại code.
+- **`py -3`, không phải `python`** trong `.bat` — `python` máy này trỏ venv khác.
+- **Không ghim path tuyệt đối** — thư mục sẽ bị move. Dùng `Path(__file__).resolve().parent`.
+- **Docs trỏ bằng TÊN KÝ HIỆU, không số dòng** — 10/10 ref `app.py:NNN` cũ đã sai.
+- `.bat`: ASCII + CRLF. Key từ `.env`. Comment nói **vì sao**, không tả lại code.
 
 ## CẤM lặp lại (đã trả giá)
 
@@ -34,15 +33,17 @@ Không có test tự động. Mọi thay đổi phải chạy app thật và gi�
    key người dùng một lần. Gán `app.CONFIG_FILE` sang file tạm.
 2. **Không tin `sd.check_input_settings()`** — nó báo OK rồi `.start()` vẫn ném
    lỗi. Mở stream thật, hỏng thì lùi sang lựa chọn kế.
-3. **Không tham chiếu biến `e` của `except` trong lambda hoãn lại** — Python xoá
-   nó khi ra khỏi khối, `NameError` che mất lỗi thật. Đóng băng `str(exc)`.
-4. **Không đặt `after()` lên lịch khung kế tiếp bên trong `try`** — một lỗi vẽ
-   là animation chết vĩnh viễn, im lặng.
+3. **Không tham chiếu `e` của `except` trong lambda hoãn lại** — Python xoá nó khi
+   ra khỏi khối, `NameError` che mất lỗi thật. Đóng băng `str(exc)`.
+4. **Không đặt `after()` khung kế tiếp trong `try`** — một lỗi vẽ là animation chết vĩnh viễn.
 5. **Không fallback ngầm khi hotkey sai** — rơi về `space` là app tự ghi âm mỗi
    lần người dùng gõ dấu cách.
 6. **Cổng paste phải fail-closed** — nghi ngờ cửa sổ đích thì chỉ copy. Dán lạc
    cửa sổ là rò rỉ nội dung.
 7. **Không ép mic về 16 kHz** — resample thô 44100→16000 làm nhoè âm xát
    (`phết`→`chết`). Thu tần số gốc, để Whisper tự hạ mẫu.
+8. **Không mồi Whisper bằng transcript chưa lọc** — câu bịa vào lịch sử thành mồi
+   rồi tự nhân lên; lọc đủ 3 chốt. Sửa bộ lọc phải chạy lại **đối chứng âm** —
+   bản đầu nuốt oan 3 câu thật. [hallucination.md](docs/specs/hallucination.md)
 
 ## Tài liệu — `docs/specs/architecture.md` là điểm vào, mỗi module một file cạnh nó.

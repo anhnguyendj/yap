@@ -1,7 +1,13 @@
 # Kiến trúc tổng thể
 
 Một tiến trình, một file `app.py`. Không có server, không có database — trạng
-thái nằm ở hai file JSON trong `%APPDATA%\YapWindows\` và một `.env` cạnh code.
+thái nằm ở ba file JSON trong `%APPDATA%\YapWindows\` và một `.env` cạnh code.
+
+| File | Nội dung | Tài liệu |
+|---|---|---|
+| `config.json` | provider, hotkey, ngôn ngữ, từ vựng | [config-and-secrets.md](config-and-secrets.md) |
+| `history.json` | 100 transcript gần nhất — **cũng là nguồn mồi** | [prompting.md](prompting.md) |
+| `corrections.json` | `{nghe nhầm: đúng}` người dùng dạy | [corrections.md](corrections.md) |
 
 ## Luồng dữ liệu
 
@@ -28,10 +34,21 @@ thái nằm ở hai file JSON trong `%APPDATA%\YapWindows\` và một `.env` c�
    └──────────┬───────────┘
               │  qua cổng
               ▼
-   ┌──────────────────────┐   Groq whisper-large-v3
-   │ Transcriber          │   + prompt mồi từ vựng Anh-Việt
-   └──────────┬───────────┘                     → transcription.md
-              │  text
+   ┌──────────────────────┐   Groq whisper-large-v3 · temperature=0
+   │ Transcriber          │   mồi = ngữ cảnh + từ vựng + cặp đã sửa
+   └──────────┬───────────┘        → transcription.md · prompting.md
+              │  text thô
+              ▼
+   ┌──────────────────────┐   thay cụm đã học, khớp theo biên từ
+   │ apply_corrections()  │                     → corrections.md
+   └──────────┬───────────┘
+              │
+              ▼
+   ┌──────────────────────┐   bỏ câu outro YouTube do Whisper bịa.
+   │ strip_hallucination()│   Lọc TRƯỚC cả paste lẫn lưu — nếu không
+   │                      │   nó vào lịch sử rồi quay lại làm mồi.
+   └──────────┬───────────┘                     → hallucination.md
+              │  text sạch
               ▼
    ┌──────────────────────┐   3 cổng, fail-closed
    │ _paste()             │   ① đúng cửa sổ?  ② modifier đã nhả?
@@ -40,7 +57,16 @@ thái nằm ở hai file JSON trong `%APPDATA%\YapWindows\` và một `.env` c�
               │
               ├──► Ctrl+V vào cửa sổ đích
               └──► history.json  +  cửa sổ Lịch sử
+                        │
+                        │  người dùng sửa tay một dòng
+                        ▼
+                   corrections.json ──► quay lại làm mồi cho lần sau
+                        → corrections.md
 ```
+
+> Vòng phản hồi ở cuối sơ đồ là chỗ nguy hiểm nhất của app: mọi thứ vào
+> `history.json` đều quay lại làm mồi cho Whisper. Câu bịa lọt vào là nó tự
+> nhân lên. Đọc [hallucination.md](hallucination.md) trước khi đụng vào.
 
 ## Các thành phần
 
@@ -48,7 +74,10 @@ thái nằm ở hai file JSON trong `%APPDATA%\YapWindows\` và một `.env` c�
 |---|---|---|
 | `SmartHook` | Nghe phím nóng, phát 3 sự kiện | [hotkey.md](hotkey.md) |
 | `AudioRecorder`, `input_candidates`, `wav_stats` | Thu âm, chọn thiết bị, cổng chặn | [audio.md](audio.md) |
-| `Transcriber` | Gọi Groq/OpenAI, mồi từ vựng | [transcription.md](transcription.md) |
+| `Transcriber` | Gọi Groq/OpenAI | [transcription.md](transcription.md) |
+| `build_prompt`, `DEFAULT_PROMPT` | Dựng mồi, ngân sách 880 byte | [prompting.md](prompting.md) |
+| `strip_hallucination` | Bỏ câu Whisper bịa, cắt vòng tự siết | [hallucination.md](hallucination.md) |
+| `learn_corrections`, `apply_corrections` | Học sửa lỗi từ bản người dùng sửa tay | [corrections.md](corrections.md) |
 | `YapApp._paste` | Đưa text vào cửa sổ đích an toàn | [paste.md](paste.md) |
 | `load_env`, `load_config`, `_write_atomic` | Key và cấu hình | [config-and-secrets.md](config-and-secrets.md) |
 | `MainWindow`, `HistoryWindow`, `SettingsDialog` | Giao diện | [ui.md](ui.md) |

@@ -1,6 +1,6 @@
 # Vòng đời tiến trình
 
-`app.py:212` `acquire_single_instance` · `YapApp.__init__` / `quit`
+`acquire_single_instance` · `YapApp.__init__` / `YapApp.quit`
 
 ## Một bản chạy một lúc
 

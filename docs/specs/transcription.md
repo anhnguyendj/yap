@@ -1,8 +1,6 @@
 # Nhận dạng — `Transcriber`
 
-`app.py:462`
-
-## API
+`Transcriber` · `GROQ_MODELS`
 
 ```python
 Transcriber().transcribe(audio_bytes, cfg) -> str
@@ -10,6 +8,7 @@ Transcriber().transcribe(audio_bytes, cfg) -> str
 
 Đọc từ `cfg`: `provider`, `language`, `prompt`, `model`. Key lấy qua
 `provider_key()` — xem [config-and-secrets.md](config-and-secrets.md).
+Nội dung `prompt` được dựng ở [prompting.md](prompting.md).
 
 | Provider | Model | Ghi chú |
 |---|---|---|
@@ -20,7 +19,8 @@ Transcriber().transcribe(audio_bytes, cfg) -> str
 
 `whisper-large-v3-turbo` nhanh hơn nhưng là bản chưng cất — yếu hơn ở tiếng
 không phải tiếng Anh. Chênh lệch giá (~$0.04 vs ~$0.11/giờ) không phải ràng
-buộc; bị nghe nhầm mới là.
+buộc; bị nghe nhầm mới là. Cả hai để người dùng chọn trong Settings
+(`GROQ_MODELS`).
 
 > **Chưa đo được trên giọng người dùng thật.** Phép đo duy nhất chạy được là
 > giọng tổng hợp tiếng Anh, và nó **không ủng hộ** large-v3. Chọn large-v3 dựa
@@ -30,39 +30,25 @@ buộc; bị nghe nhầm mới là.
 
 ## `language`: để `auto`
 
-Người dùng chính code-switch liên tục. Khoá sang `vi` làm hỏng ngay khi có
-một hai câu tiếng Anh. Whisper tự nhận diện từng đoạn.
+Người dùng chính code-switch liên tục. Khoá sang `vi` làm hỏng ngay khi có một
+hai câu tiếng Anh. Whisper tự nhận diện từng đoạn.
 
-## `prompt` — mồi từ vựng, thứ quan trọng nhất
+## `temperature=0`
 
-Tham số `prompt` của Whisper là **gợi ý ngữ cảnh**, không phải mệnh lệnh. Không
-có nó, từ tiếng Anh nói trong câu tiếng Việt bị phiên âm theo âm Việt:
+Để mặc định, Whisper được phép "sáng tạo" khi nghe không rõ — đúng là lúc nó đẻ
+ra câu outro YouTube. Đặt 0 buộc nó lấy đường giải mã chắc chắn nhất. Giảm nhẹ,
+**không hết** — vẫn phải lọc, xem [hallucination.md](hallucination.md).
+
+## Sau khi có text
+
+Text đi qua ba bước trước khi tới người dùng, đúng thứ tự này:
 
 ```
-"Ctrl"  →  "căn chuồn" / "cân trồn"
+transcribe() ──► apply_corrections() ──► strip_hallucination() ──► _paste()
+                 corrections.md           hallucination.md         paste.md
 ```
-
-`DEFAULT_PROMPT` (`app.py:55`) được viết thành **những câu thật có trộn hai thứ
-tiếng**, không phải danh sách từ trần. Whisper bắt chước **văn phong** của đoạn
-mồi, nên câu mẫu dạy nó "người này trộn Việt-Anh, từ tiếng Anh giữ nguyên
-tiếng Anh".
-
-Bằng chứng A/B trên cùng một file audio:
-
-| | Kết quả |
-|---|---|
-| Không mồi | `press ctrl, then open klaviyo nn8n, and push the commit to github` |
-| Có mồi | `Press Ctrl, then open Klaviyo and n8n, and push the commit to GitHub.` |
-
-Không mồi thì `n8n` dính thành `nn8n`, mất viết hoa và dấu câu.
-
-Người dùng sửa danh sách này trong Settings → mục **TỪ VỰNG**. Quy tắc: viết
-từ **đúng dạng muốn nó hiện ra**.
-
-Giới hạn: prompt của Whisper tối đa ~224 token. Thêm quá nhiều thì phần đầu
-bị cắt.
 
 ## Lỗi
 
-Không có key → `ValueError` nêu rõ tên biến và đường dẫn `.env`. Mọi lỗi khác
-để nguyên cho `YapApp._error()` hiện lên, đã đóng băng `str(exc)` từ trước.
+Không có key → `ValueError` nêu rõ tên biến và đường dẫn `.env`. Mọi lỗi khác để
+nguyên cho `YapApp._error()` hiện lên, đã đóng băng `str(exc)` từ trước.

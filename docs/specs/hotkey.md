@@ -1,6 +1,6 @@
 # Phím nóng — `SmartHook`
 
-`app.py:242`
+`SmartHook`
 
 ## Nguyên tắc nền
 

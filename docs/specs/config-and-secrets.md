@@ -1,6 +1,6 @@
 # Key và cấu hình
 
-`app.py:116-235`
+`load_env` · `load_config` · `save_config` · `_write_atomic` · `provider_key`
 
 ## API key: `.env` thắng
 

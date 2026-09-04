@@ -1,6 +1,6 @@
 # Thu âm — `AudioRecorder`, `input_candidates`, `wav_stats`
 
-`app.py:355` · `app.py:400` · `app.py:188`
+`AudioRecorder` · `input_candidates` · `wav_stats`
 
 ## Chọn thiết bị: thử thật, không hỏi suông
 
