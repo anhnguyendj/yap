@@ -1,0 +1,22 @@
+# Key — TUYET DOI khong commit
+.env
+.env.*
+!.env.example
+
+# Ban sao khi sua tay
+*.bak
+*.bak-*
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Anh xem thu cua icon
+yap_icon_preview.png
+
+# Windows
+Thumbs.db
+desktop.ini

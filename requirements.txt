@@ -1,0 +1,10 @@
+# Single source of truth for dependencies — setup.bat installs from this file.
+sounddevice>=0.4.6
+numpy>=1.24.0
+pyperclip>=1.8.2
+groq>=0.9.0
+openai>=1.30.0
+Pillow>=10.0.0
+pystray>=0.19.5
+pywin32>=306
+customtkinter>=5.2.0
