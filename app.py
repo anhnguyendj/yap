@@ -271,6 +271,63 @@ def apply_corrections(text: str, corr: dict) -> str:
     return text
 
 
+# Whisper large-v3 hoc tu hang trieu video YouTube. Gap doan im lang hay tieng
+# phong, no KHONG tra ve rong — no lap cho trong bang cau outro quen thuoc nhat.
+# Day la artifact cua model, khong tat duoc bang tham so; phai loc o dau ra.
+#
+# Neo `^` la thu giu an toan: chi bo cau NGUYEN VEN la outro. Nguoi dung noi
+# "co cai phan cac ban nho like va share ... la sao nhi?" thi cau do bat dau
+# bang "co cai phan" nen khong khop — noi that ve outro khong bi an mat.
+HALLUCINATION_RE = re.compile(
+    r"^\W*(?:"
+
+    # Loi keu goi like/share/subscribe. Dieu kien "kênh" la thu giu an toan:
+    # KHONG co no thi "Share cho anh cai link Drive" hay "Dang ky cho anh mot
+    # tai khoan Groq" — cau nguoi that noi hang ngay — bi an oan. Da thu, da
+    # thay 3 cau nhu vay bien mat truoc khi them dieu kien nay.
+    r"(?=[^.!?]*\b(?:kênh|channel)\b)"
+    r"(?:(?:hãy|nhớ|có\s+thể|đừng\s+quên|các\s+bạn|mọi\s+người|quý\s+vị|please)[\s,]+){0,4}"
+    r"(?:like|đăng\s*ký|subscribe|share|chia\s*sẻ|ủng\s*hộ|theo\s*dõi)\b.*"
+
+    # Cac cau outro co dang co dinh — khong can dieu kien "kênh".
+    r"|cảm\s*ơn\s+(?:các\s+bạn|mọi\s+người|quý\s+vị)\s+đã\s+(?:theo\s*dõi|xem|lắng\s*nghe).*"
+    r"|hẹn\s+gặp\s+lại\s+(?:các\s+bạn|mọi\s+người|quý\s+vị|trong)\b.*"
+    r"|ghiền\s+mì\s+gõ\b.*"
+    r"|phụ\s*đề\s+(?:được\s+)?(?:thực\s+hiện|dịch)\s+bởi\b.*"
+
+    # Tieng Anh: doi dung cap "like ... subscribe", vi "Subscribe cho anh cai
+    # newsletter" la cau that. "Thanks for watching" thi khong the la cau that.
+    r"|thanks?\s+(?:you\s+)?for\s+watching\b.*"
+    r"|(?:don't\s+forget\s+to\s+|please\s+)?like[\s,]+(?:and\s+)?subscribe\b.*"
+
+    r")\W*$",
+    re.IGNORECASE,
+)
+
+# Tach cau theo dau ket cau. Outro luon la mot cau tron, nen don vi loc la cau —
+# loc theo cum se an vao giua cau that.
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?…])\s+")
+
+
+def strip_hallucination(text: str) -> str:
+    """Bo nhung CAU do Whisper bia ra tu doan im lang.
+
+    Bo o BAT KY vi tri nao, khong chi cuoi: mot khoang lang GIUA luc doc chinh
+    ta cung de no chen cau outro vao giua hai y that.
+
+    Cai bi bo duoc IN RA, khong nuot im lang — nuot im lang thi lan sau mat
+    chu that cung khong ai biet.
+    """
+    if not text:
+        return text
+    kept, dropped = [], []
+    for s in _SENTENCE_SPLIT.split(text.strip()):
+        (dropped if s.strip() and HALLUCINATION_RE.match(s) else kept).append(s)
+    if dropped:
+        print("[loc] bo cau Whisper bia: " + " | ".join(d.strip() for d in dropped))
+    return " ".join(k for k in kept if k.strip()).strip()
+
+
 def _nbytes(s: str) -> int:
     return len(s.encode("utf-8"))
 
@@ -310,7 +367,10 @@ def build_prompt(cfg: dict, history: list, corr: dict = None) -> str:
     room   = budget - _nbytes(vocab)
     recent = []
     for item in reversed(history[-RECENT_CONTEXT:]):        # moi nhat truoc
-        t = (item.get("text") or "").strip()[:RECENT_MAX_CHARS]
+        # Loc lai o day nua: history.json cua ban cu da co cau bia nam san.
+        # Khong loc thi cau bia lai duoc mom cho Whisper -> no bia tiep -> lai
+        # vao lich su. Chinh vong lap do la thu sinh ra loi nay.
+        t = strip_hallucination((item.get("text") or "").strip())[:RECENT_MAX_CHARS]
         if not t or _nbytes(t) + 1 > room:
             continue
         recent.insert(0, t)                                  # giu dung thu tu
@@ -660,7 +720,11 @@ class Transcriber:
     def _groq(self, f, key, lang, prompt="", model="whisper-large-v3") -> str:
         from groq import Groq
         c = Groq(api_key=key)
-        p = {"file": f, "model": model, "response_format": "json"}
+        # temperature=0: buoc Whisper lay duong giai ma chac chan nhat.
+        # De mac dinh, no duoc phep "sang tao" khi khong nghe ro —
+        # dung la luc no de ra cau outro YouTube.
+        p = {"file": f, "model": model, "response_format": "json",
+             "temperature": 0}
         if lang:   p["language"] = lang
         if prompt: p["prompt"]   = prompt
         return c.audio.transcriptions.create(**p).text.strip()
@@ -1416,6 +1480,9 @@ class YapApp:
                 cfg["prompt"] = build_prompt(self.cfg, self.history, self.corrections)
             text = self._transcriber.transcribe(audio, cfg)
             text = apply_corrections(text, self.corrections)
+            # Truoc _paste VA truoc _save_hist: chan ca hai duong. Neu chi chan
+            # duong dan thi cau bia van vao lich su roi quay lai mom Whisper.
+            text = strip_hallucination(text)
             # Re-check before EACH side effect, not once up front: quit() can
             # land while _paste is waiting, and a dead app must not type.
             if text and not self._shutdown.is_set():
