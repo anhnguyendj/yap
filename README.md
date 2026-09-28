@@ -3,6 +3,23 @@
 Hold a key, speak, and your words appear where the cursor is. A push-to-talk
 dictation tool for Windows, built for people who mix languages mid-sentence.
 
+## Install in one line
+
+Open **PowerShell** (Start menu → type `powershell`) and paste:
+
+```powershell
+irm https://raw.githubusercontent.com/anhnguyendj/yap/main/install.ps1 | iex
+```
+
+- **Needs** Windows 10/11. Python 3.10+ is installed for you via `winget` if
+  missing (it asks first). Everything goes into `%LOCALAPPDATA%\Yap`, with a
+  Yap shortcut on the Desktop and in the Start menu.
+- **Key:** the installer opens [console.groq.com/keys](https://console.groq.com/keys)
+  (free) and a Notepad with `.env` — paste the key after `GROQ_API_KEY=`, save.
+  Run the same line again any time to update; your `.env` and settings are kept.
+- **Uninstall:** quit Yap from its tray icon, then delete `%LOCALAPPDATA%\Yap`,
+  `%APPDATA%\YapWindows` and the two `Yap` shortcuts.
+
 Nothing sits on your desktop until you speak: a thin waveform bar fades in at
 the top of the screen while you hold the key, then disappears.
 
@@ -34,8 +51,9 @@ editable — add the words your own work is full of.
 - **Live waveform** — real mic levels, not a canned animation
 - **Groq Whisper large-v3** (free tier: 2000 min/day) or OpenAI Whisper
 
-## Install
+## Install from source
 
+For hacking on Yap. Everyone else: use the [one-line install](#install-in-one-line).
 Requires **Python 3.10+** on Windows 10/11.
 
 ```bat
@@ -110,9 +128,10 @@ and Right Alt are all safe.
 
 Giữ **Right Ctrl**, nói, thả ra — chữ tự dán vào chỗ con trỏ.
 
-Cài: chạy `setup.bat`, lấy key free ở [console.groq.com](https://console.groq.com),
-chép `.env.example` thành `.env` rồi dán key vào sau `GROQ_API_KEY=`. Chạy
-`tao-shortcut.bat` để có icon ngoài Desktop.
+Cài: mở PowerShell, dán đúng một dòng ở mục
+[Install in one line](#install-in-one-line). Trình cài mở sẵn trang lấy key free
+và Notepad — dán key vào sau `GROQ_API_KEY=`, lưu lại là xong. Chạy lại dòng đó
+để cập nhật; key và cài đặt của anh được giữ nguyên.
 
 Nói lẫn tiếng Anh mà máy nghe sai thì vào Settings, mục **TỪ VỰNG**, thêm từ đó
 vào — viết đúng dạng anh muốn nó hiện ra. Muốn biết cấu hình nào hợp giọng mình
