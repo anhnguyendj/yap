@@ -14,9 +14,11 @@ irm https://raw.githubusercontent.com/anhnguyendj/yap/main/install.ps1 | iex
 - **Needs** Windows 10/11. Python 3.10+ is installed for you via `winget` if
   missing (it asks first). Everything goes into `%LOCALAPPDATA%\Yap`, with a
   Yap shortcut on the Desktop and in the Start menu.
-- **Key:** the installer opens [console.groq.com/keys](https://console.groq.com/keys)
-  (free) and a Notepad with `.env` — paste the key after `GROQ_API_KEY=`, save.
-  Run the same line again any time to update; your `.env` and settings are kept.
+- **Key:** Yap starts and opens its Settings. Create a free key at
+  [console.groq.com/keys](https://console.groq.com/keys), paste it into the
+  **API KEY** box, press **Save & Apply**. Later: tray icon → right-click →
+  Settings. Run the same line again any time to update; your key and settings
+  are kept.
 - **Uninstall:** quit Yap from its tray icon, then delete `%LOCALAPPDATA%\Yap`,
   `%APPDATA%\YapWindows` and the two `Yap` shortcuts.
 
@@ -62,15 +64,17 @@ cd yap
 setup.bat
 ```
 
-Get a free API key at [console.groq.com](https://console.groq.com) → API Keys →
-Create API key. Then:
+Get a free API key at [console.groq.com/keys](https://console.groq.com/keys)
+and paste it in Settings, like everyone else. Or, to keep it out of
+`config.json`, put it in a `.env`:
 
 ```bat
 copy .env.example .env
 ```
 
-Open `.env`, paste the key after `GROQ_API_KEY=`, save. No restart needed — the
-file is re-read on every transcription.
+Paste the key after `GROQ_API_KEY=`, save. No restart needed — the file is
+re-read on every transcription. A key in `.env` **wins** over the one in
+Settings; Settings then says so in red, so the two never disagree silently.
 
 ```bat
 run.bat                 :: run with a log window
@@ -116,8 +120,8 @@ Your own voice is the only benchmark that counts.
 
 | Where | What |
 |---|---|
-| `.env` (next to `app.py`) | `GROQ_API_KEY`, `OPENAI_API_KEY` — never committed |
-| `%APPDATA%\YapWindows\config.json` | hotkey, model, language, vocabulary hint |
+| `%APPDATA%\YapWindows\config.json` | API key (from Settings), hotkey, model, language, vocabulary hint |
+| `.env` (next to `app.py`, optional) | `GROQ_API_KEY`, `OPENAI_API_KEY` — overrides the Settings key, never committed |
 | `%APPDATA%\YapWindows\history.json` | last 100 transcripts |
 
 Pick a hotkey you never type with. The hook does **not** suppress the key, so
@@ -129,9 +133,11 @@ and Right Alt are all safe.
 Giữ **Right Ctrl**, nói, thả ra — chữ tự dán vào chỗ con trỏ.
 
 Cài: mở PowerShell, dán đúng một dòng ở mục
-[Install in one line](#install-in-one-line). Trình cài mở sẵn trang lấy key free
-và Notepad — dán key vào sau `GROQ_API_KEY=`, lưu lại là xong. Chạy lại dòng đó
-để cập nhật; key và cài đặt của anh được giữ nguyên.
+[Install in one line](#install-in-one-line). Cài xong Yap tự mở Settings: lấy key
+free ở [console.groq.com/keys](https://console.groq.com/keys), dán vào ô
+**API KEY**, bấm **Save & Apply** là xong. Mở lại Settings: chuột phải icon Yap
+ở khay → Settings. Chạy lại dòng đó để cập nhật; key và cài đặt của anh được giữ
+nguyên.
 
 Nói lẫn tiếng Anh mà máy nghe sai thì vào Settings, mục **TỪ VỰNG**, thêm từ đó
 vào — viết đúng dạng anh muốn nó hiện ra. Muốn biết cấu hình nào hợp giọng mình

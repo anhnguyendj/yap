@@ -107,8 +107,8 @@ CONTEXT_GROW     = 3     # so lan noi cum ra hai ben cho du dac trung
 # Windows giau icon khay moi cai — khong co cai nay thi khong vao duoc.
 DOUBLE_TAP = 0.6
 
-# The API key lives in this project's own .env, not in a shared store and not
-# in another repo's file. config.json stays as a fallback for existing installs.
+# Normal users paste the key in Settings (saved to config.json). A key in this
+# project's .env still wins - the dev / override path - and Settings says so.
 ENV_FILE      = Path(__file__).resolve().parent / ".env"
 ENV_KEY_NAMES = {"groq": "GROQ_API_KEY", "openai": "OPENAI_API_KEY"}
 
@@ -393,6 +393,21 @@ def key_source(provider: str, cfg: dict) -> str:
     if (cfg.get("api_key") or "").strip():
         return "config"
     return "none"
+
+
+# .env beating a key pasted in Settings used to be silent: the user saw "wrong
+# key" with no way to guess why. Shown only when .env really has a key, so the
+# empty .env the installer creates never scares anyone.
+ENV_OVERRIDE_NOTE = "⚠ Đang dùng key từ .env, ô này bị bỏ qua."
+
+
+def key_note(provider: str, cfg: dict) -> str:
+    """The line under the key box in Settings."""
+    return {
+        "env":    f"{ENV_OVERRIDE_NOTE}\n({ENV_FILE})",
+        "config": "✓ Đã lưu key.",
+        "none":   "Chưa có key. Dán key vào ô trên rồi bấm Save & Apply.",
+    }[key_source(provider, cfg)]
 
 
 def wav_stats(audio: bytes):
@@ -702,10 +717,10 @@ class Transcriber:
         api_key  = provider_key(provider, cfg)
 
         if not api_key:
-            var = ENV_KEY_NAMES.get(provider, "GROQ_API_KEY")
             raise ValueError(
-                f"Chưa có API key.\n\nDán key vào {var}= trong file:\n{ENV_FILE}\n\n"
-                "Lấy key free ở: console.groq.com"
+                "Chưa có API key.\n\nMở Settings (chuột phải icon Yap ở khay → Settings), "
+                "dán key vào ô API KEY rồi bấm Save & Apply.\n\n"
+                "Lấy key free ở: console.groq.com/keys"
             )
 
         prompt = (cfg.get("prompt") or "").strip()
@@ -832,16 +847,13 @@ class SettingsDialog(ctk.CTkToplevel):
                             fg_color=BG3, hover_color=BORDER2, text_color=DIM,
                             font=("Segoe UI", 10), command=toggle)
         eye.pack(side="left", padx=(6, 0))
-        src = key_source(self.cfg.get("provider", "groq"), self.cfg)
-        note = {
-            "env":    f"✓ Đang dùng key trong .env — ô trên bỏ trống là đúng",
-            "config": "Key đang lưu ở config.json. Nên chuyển sang .env.",
-            "none":   "Chưa có key. Dán vào .env cạnh app.py, hoặc điền ô trên.",
-        }[src]
-        ctk.CTkLabel(ac, text=note, font=("Segoe UI", 10),
-                     text_color=(GREEN if src == "env" else DIM)).pack(
+        provider = self.cfg.get("provider", "groq")
+        src = key_source(provider, self.cfg)
+        ctk.CTkLabel(ac, text=key_note(provider, self.cfg), font=("Segoe UI", 10),
+                     justify="left", wraplength=420,
+                     text_color={"env": RED, "config": GREEN}.get(src, DIM)).pack(
             anchor="w", padx=14, pady=(0, 2))
-        ctk.CTkLabel(ac, text="Get free key at  console.groq.com",
+        ctk.CTkLabel(ac, text="Get free key at  console.groq.com/keys",
                      font=("Segoe UI", 10), text_color=DIM).pack(
             anchor="w", padx=14, pady=(0, 8))
 

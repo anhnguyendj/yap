@@ -1,7 +1,7 @@
 # Yap installer. One line in PowerShell:
 #   irm https://raw.githubusercontent.com/anhnguyendj/yap/main/install.ps1 | iex
 #
-# Running it again updates the code and keeps your .env and settings.
+# Running it again updates the code and keeps your key and settings.
 #
 # Knobs (environment variables, all optional):
 #   YAP_DIR           install folder             (default %LOCALAPPDATA%\Yap)
@@ -136,12 +136,15 @@ foreach ($d in $linkDirs) {
 }
 
 # --- 6. Key file: create once, names only, never touch an existing one -----
+# Only for the dev / override path: normal users paste the key in Settings,
+# so nothing here tells them about this file.
 # FileMode.CreateNew fails if the file exists, so even a bug above cannot
 # turn this into an overwrite of someone's real key.
+# -Encoding UTF8: PS 5.1 otherwise reads the file as ANSI and a dash in a
+# comment comes out as mojibake in the new file.
 $envFile = Join-Path $Dir '.env'
-$newKeyFile = $false
 if (-not (Test-Path $envFile)) {
-    $lines = Get-Content (Join-Path $Dir '.env.example') | ForEach-Object {
+    $lines = Get-Content (Join-Path $Dir '.env.example') -Encoding UTF8 | ForEach-Object {
         if ($_ -match '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=') { "$($Matches[1])=" } else { $_ }
     }
     $fs = [IO.File]::Open($envFile, [IO.FileMode]::CreateNew)
@@ -150,20 +153,29 @@ if (-not (Test-Path $envFile)) {
         $lines | ForEach-Object { $w.WriteLine($_) }
         $w.Flush()
     } finally { $fs.Dispose() }
-    $newKeyFile = $true
-    Say "Created $envFile (empty - paste your key after GROQ_API_KEY=)"
-} else {
-    Say 'Kept your existing .env'
 }
 
 # --- 7. Start --------------------------------------------------------------
+# Same test as the app's own "no key -> open Settings" check (.env, then
+# config.json), so this only says "paste your key" when Settings really opens.
+function Test-HasKey {
+    $hasEnvKey = Get-Content $envFile -Encoding UTF8 -ErrorAction SilentlyContinue |
+        Where-Object { $_ -match '^\s*[A-Z_]+_API_KEY\s*=\s*\S' }
+    if ($hasEnvKey) { return $true }
+    $cfgFile = Join-Path $env:APPDATA 'YapWindows\config.json'
+    try { return [bool]"$((Get-Content $cfgFile -Raw -Encoding UTF8 | ConvertFrom-Json).api_key)".Trim() }
+    catch { return $false }
+}
+$needKey = -not (Test-HasKey)
 Start-Process -FilePath $venvPyw -ArgumentList ('"' + (Join-Path $Dir 'app.py') + '"') -WorkingDirectory $Dir
-if ($newKeyFile) {
+if ($needKey) {
     Start-Process $KeysUrl
-    Start-Process notepad.exe -ArgumentList ('"' + $envFile + '"')
     Write-Host ''
-    Write-Host 'Last step: create a free key on the page that just opened,'
-    Write-Host 'paste it after GROQ_API_KEY= in Notepad, save. No restart needed.'
+    Write-Host 'Last step: Yap just opened its Settings window.' -ForegroundColor Yellow
+    Write-Host "  1. Create a free key on the page that just opened ($KeysUrl)"
+    Write-Host '  2. Paste it into the API KEY box in Settings'
+    Write-Host '  3. Press Save & Apply'
+    Write-Host 'Settings later: right-click the Yap icon in the tray -> Settings.'
 }
 Write-Host ''
 Write-Host 'Yap is running. Hold Right Ctrl, speak, let go.' -ForegroundColor Green
