@@ -328,6 +328,76 @@ def strip_hallucination(text: str) -> str:
     return " ".join(k for k in kept if k.strip()).strip()
 
 
+# Whisper giai ma tung cua so 30 giay. Noi dai (>~40s) thi thinh thoang MOT cua
+# so sap: moi tu tieng Viet chi con phu am dau — "chạy"->"ch", "khách"->"kh",
+# "muốn"->"mu" — con cua so truoc va sau van dung. Gap 15/10/2026 trong mot cau
+# 1.201 ky tu. temperature=0 khong cuu: no van chon duong giai ma do.
+#
+# Dau hieu: "tu" chi gom phu am. Am tiet tieng Viet nao cung co nguyen am, nen
+# cau that gan nhu khong bao gio co. Chi bat chu thuong hoac Hoa-dau ("Th"),
+# KHONG bat viet tat toan hoa — "PR", "CSS", "SQL" la tu that.
+_GARBLE_TOKEN = re.compile(r"^[BCDĐFGHJKLMNPQRSTVWXZ]?[bcdđfghjklmnpqrstvwxz]{0,3}$")
+_WORD = re.compile(r"\w+")
+GARBLE_MIN_BAD = 3      # it hon thi la tinh co, khong phai cua so sap
+GARBLE_RATIO   = 0.3
+RETRY_PAD      = 0.25   # giay them hai dau khuc cat lai, khoi cut am bien
+
+
+def garble_count(text: str) -> tuple:
+    words = _WORD.findall(text or "")
+    return sum(1 for w in words if _GARBLE_TOKEN.match(w)), len(words)
+
+
+def is_garbled(text: str) -> bool:
+    bad, total = garble_count(text)
+    return bad >= GARBLE_MIN_BAD and bad >= GARBLE_RATIO * total
+
+
+def _seg(s, k):
+    return s.get(k) if isinstance(s, dict) else getattr(s, k, None)
+
+
+def repair_garbled(text: str, segments, audio: bytes, redo) -> str:
+    """Nhan dang lai rieng khuc audio cua nhung doan bi sap.
+
+    Khong doan nao sap thi tra NGUYEN `text` — khong dung lai tu segment, de
+    duong binh thuong giu y het nhu truoc. Ban lam lai chi duoc nhan khi it
+    tu sap hon ban cu; lam lai hong hay loi mang thi giu ban cu va in ra.
+    """
+    if not segments:
+        return text
+    parts = [(_seg(s, "text") or "").strip() for s in segments]
+    bad = [is_garbled(t) for t in parts]
+    if not any(bad):
+        return text
+    # Gom cac doan sap lien nhau thanh mot khuc: cat qua vun thi Whisper mat
+    # ngu canh, lai sap tiep.
+    i = 0
+    while i < len(parts):
+        if not bad[i]:
+            i += 1; continue
+        j = i
+        while j + 1 < len(parts) and bad[j + 1]:
+            j += 1
+        old = " ".join(parts[i:j + 1])
+        start = float(_seg(segments[i], "start") or 0) - RETRY_PAD
+        end   = float(_seg(segments[j], "end") or 0) + RETRY_PAD
+        try:
+            new = redo(wav_slice(audio, start, end)).strip()
+        except Exception as exc:
+            print(f"[sap] lam lai {start:.1f}-{end:.1f}s loi: {exc}")
+            new = ""
+        if new and garble_count(new)[0] < garble_count(old)[0]:
+            print(f"[sap] {start:.1f}-{end:.1f}s: {old!r} -> {new!r}")
+            parts[i] = new
+            for k in range(i + 1, j + 1):
+                parts[k] = ""
+        else:
+            print(f"[sap] {start:.1f}-{end:.1f}s lam lai khong tot hon, giu: {old!r}")
+        i = j + 1
+    return " ".join(p for p in parts if p).strip()
+
+
 def _nbytes(s: str) -> int:
     return len(s.encode("utf-8"))
 
@@ -432,6 +502,21 @@ def wav_stats(audio: bytes):
         blocks = samples[:n_win * win].reshape(n_win, win)
         rms = float(np.sqrt(np.mean(blocks ** 2, axis=1)).max())
     return frames / float(rate), rms
+
+
+def wav_slice(audio: bytes, start: float, end: float) -> bytes:
+    """Cắt một khúc [start, end] giây ra WAV riêng, giữ nguyên tần số gốc."""
+    with wave.open(io.BytesIO(audio), "rb") as wf:
+        rate, width, ch = wf.getframerate(), wf.getsampwidth(), wf.getnchannels()
+        n = wf.getnframes()
+        a = max(0, int(start * rate)); b = min(n, int(end * rate))
+        wf.setpos(a)
+        raw = wf.readframes(max(0, b - a))
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as out:
+        out.setnchannels(ch); out.setsampwidth(width); out.setframerate(rate)
+        out.writeframes(raw)
+    return buf.getvalue()
 
 
 def acquire_single_instance():
@@ -727,22 +812,30 @@ class Transcriber:
 
         model = cfg.get("model") or DEFAULT_CONFIG["model"]
 
+        if provider == "groq":
+            text, segs = self._groq(audio, api_key, lang, prompt, model)
+            return repair_garbled(
+                text, segs, audio,
+                lambda clip: self._groq(clip, api_key, lang, prompt, model)[0])
         f = io.BytesIO(audio); f.name = "audio.wav"
-        if provider == "groq":   return self._groq(f, api_key, lang, prompt, model)
         if provider == "openai": return self._openai(f, api_key, lang, prompt)
         raise ValueError(f"Unknown provider: {provider}")
 
-    def _groq(self, f, key, lang, prompt="", model="whisper-large-v3") -> str:
+    def _groq(self, audio: bytes, key, lang, prompt="", model="whisper-large-v3"):
+        """(text, segments). Segments co moc gio — de cat lai dung khuc bi sap."""
         from groq import Groq
         c = Groq(api_key=key)
+        f = io.BytesIO(audio); f.name = "audio.wav"
         # temperature=0: buoc Whisper lay duong giai ma chac chan nhat.
         # De mac dinh, no duoc phep "sang tao" khi khong nghe ro —
         # dung la luc no de ra cau outro YouTube.
-        p = {"file": f, "model": model, "response_format": "json",
+        p = {"file": f, "model": model, "response_format": "verbose_json",
              "temperature": 0}
         if lang:   p["language"] = lang
         if prompt: p["prompt"]   = prompt
-        return c.audio.transcriptions.create(**p).text.strip()
+        r = c.audio.transcriptions.create(**p)
+        segs = getattr(r, "segments", None) or (getattr(r, "model_extra", None) or {}).get("segments")
+        return r.text.strip(), segs or []
 
     def _openai(self, f, key, lang, prompt="") -> str:
         try: import openai
