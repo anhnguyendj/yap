@@ -39,12 +39,30 @@ hai câu tiếng Anh. Whisper tự nhận diện từng đoạn.
 ra câu outro YouTube. Đặt 0 buộc nó lấy đường giải mã chắc chắn nhất. Giảm nhẹ,
 **không hết** — vẫn phải lọc, xem [hallucination.md](hallucination.md).
 
+## Nói dài: một cửa sổ 30 giây bị sập — `repair_garbled()`
+
+Whisper giải mã từng cửa sổ 30 giây. Khi nói dài (~40 giây trở lên), thỉnh thoảng
+**một** cửa sổ sập: mỗi từ tiếng Việt chỉ còn phụ âm đầu (`chạy`→`ch`, `khách`→`kh`,
+`muốn`→`mu`). Các cửa sổ trước và sau vẫn đúng. Đến 15/10/2026, `history.json` có
+5 câu bị như vậy. `temperature=0` không cứu được.
+
+Cách sửa: Groq gọi bằng `verbose_json` để lấy segment có mốc giờ. `is_garbled()` coi
+một segment là sập khi có ≥3 "từ" chỉ gồm phụ âm và chiếm ≥30% số từ. Âm tiết tiếng
+Việt nào cũng có nguyên âm, nên câu thật gần như không bao giờ có dạng này. Viết tắt
+toàn hoa (`PR`, `CSS`) không bị tính. Các segment sập liền nhau được gom lại, cắt
+đúng khúc audio đó (`wav_slice`, đệm thêm 0,25 giây mỗi đầu) và nhận dạng lại riêng.
+Bản làm lại chỉ được dùng khi ít từ sập hơn bản cũ. Nếu không có segment nào sập,
+text gốc được trả nguyên như trước.
+
+Đối chứng âm khi viết: chạy trên 100 câu thật trong lịch sử, bắt đúng 5/5 câu sập,
+0 câu bắt oan. Nếu sửa ngưỡng thì phải chạy lại phép thử này.
+
 ## Sau khi có text
 
 Text đi qua ba bước trước khi tới người dùng, đúng thứ tự này:
 
 ```
-transcribe() ──► apply_corrections() ──► strip_hallucination() ──► _paste()
+transcribe() ──► repair_garbled() ──► apply_corrections() ──► strip_hallucination() ──► _paste()
                  corrections.md           hallucination.md         paste.md
 ```
 
